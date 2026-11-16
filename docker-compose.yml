@@ -1,0 +1,103 @@
+# Gotenberg - hardened, version-pinned service definition.
+#
+# Target: a Linux VM (Docker/Podman) or a managed container service
+#         (Azure Container Instances / App Service for Containers / Container Apps).
+#
+# NOTE: This is a LINUX container. It cannot join the Windows-container Sitecore
+#       compose stack in C:\10.4\docker. See README.md section 2.
+#
+# All flags below were verified against 8.34.0 with:
+#   docker run --rm gotenberg/gotenberg:8.34.0 gotenberg --help
+#
+# IMPORTANT: the "gotenberg" binary name MUST be the first element of `command`.
+# Passing bare flags fails at startup with:
+#   [FATAL tini (7)] exec --some-flag failed: No such file or directory
+
+services:
+  gotenberg:
+    # PIN AN EXPLICIT PATCHED VERSION. Do not use the floating ":8" tag.
+    # Check https://github.com/gotenberg/gotenberg/releases before deploying.
+    # Known fix floors: 8.33 (path traversal), 8.34 (LibreOffice SSRF),
+    # plus later 8.x for the RCE/SSRF/auth-bypass cluster.
+    #
+    # VARIANT CHOICE (README section 3a) - all variants include PDF Engines, so
+    # merge (AC8) works in every one. The real trade-off:
+    #   :8           full      - adds PDF/A & PDF/UA CONVERSION (accessibility
+    #                            driver) but carries LibreOffice.
+    #   :8-chromium  ~30% less - URL/HTML->PDF + merge only. NO PDF/A / PDF/UA
+    #                            conversion. Chromium's generateTaggedPdf
+    #                            (tagged PDF) still works.
+    image: gotenberg/gotenberg:8.34.0
+
+    container_name: gotenberg
+
+    # Bind to localhost when running on a VM behind a reverse proxy.
+    # Use "3000:3000" only if the network boundary is enforced elsewhere.
+    ports:
+      - "127.0.0.1:3000:3000"
+
+    environment:
+      # Consumed by --api-enable-basic-auth. Source these from a secret store
+      # (Key Vault / pipeline variables), never commit real values.
+      GOTENBERG_API_BASIC_AUTH_USERNAME: ${GOTENBERG_USER:-sitecore-cm}
+      GOTENBERG_API_BASIC_AUTH_PASSWORD: ${GOTENBERG_PASSWORD:?set GOTENBERG_PASSWORD}
+
+    command:
+      - "gotenberg"                        # REQUIRED first element - see note above
+
+      # --- Authentication --------------------------------------------------------
+      # Gotenberg DOES ship basic auth; it is simply off by default.
+      # Defence-in-depth on top of network isolation, not a replacement for it.
+      - "--api-enable-basic-auth"
+
+      # --- SSRF containment (primary mitigation, supports AC12) -------------------
+      # Restrict what Chromium may fetch to the CM preview host ONLY.
+      # Replace with the real CM hostname per environment.
+      - "--chromium-allow-list=^https://(cm\\.michigan\\.local|cm\\.dev\\.michigan\\.gov)(/.*)?$$"
+
+      # Resolve-then-check SSRF guards. Stronger than regex deny-lists, because
+      # several Gotenberg CVEs were regex-bypasses (mixed-case schemes, IPv6-mapped
+      # loopback, redirects). These evaluate the RESOLVED IP instead.
+      - "--api-download-from-deny-private-ips"
+      - "--webhook-deny-private-ips"
+
+      # --- Disable unused, CVE-prone features ------------------------------------
+      - "--api-disable-download-from"      # downloadFrom was an SSRF vector
+      # Uncomment if office-document conversion is not needed. NOTE: this also
+      # removes PDF/A & PDF/UA conversion (README section 3a).
+      # - "--libreoffice-disable-routes"
+
+      # --- Operational -----------------------------------------------------------
+      - "--api-timeout=120s"
+      - "--log-level=info"
+
+      # --- LOCAL POC ONLY --------------------------------------------------------
+      # Needed to render https://cm.michigan.local behind the self-signed Traefik
+      # certificate. NEVER enable this outside local testing - it disables TLS
+      # verification for every Chromium fetch.
+      # - "--chromium-ignore-certificate-errors"
+
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+    restart: unless-stopped
+
+    # Chromium is memory-hungry and a 20-30 page batch (AC6) will push it.
+    # Vendor floor is 512Mi / 0.2 CPU; >=1Gi recommended. Tune against real pages.
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: "2.0"
+
+    # --- Container hardening ----------------------------------------------------
+    # Image runs as non-root user "gotenberg" (UID/GID 1001) by default.
+    security_opt:
+      - no-new-privileges:true
+    read_only: false      # Gotenberg needs scratch space for conversions
+    tmpfs:
+      - /tmp

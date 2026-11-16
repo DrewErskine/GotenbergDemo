@@ -1,0 +1,7 @@
+# Generated PDFs from the POC harness
+output/
+
+# Local overrides
+docker-compose.override.yml
+*.local.yml
+.env
