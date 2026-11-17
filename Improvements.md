@@ -48,3 +48,20 @@ Things to look into:
 - Ask team why the hero is hidden in print, and whether it should show in PDFs.
 - Decide whether PDFs should include the hero, or keep the print behavior.
 - If the hero should show, either change the print stylesheet on the site, override the rule in the script, or expend .
+
+### 5. PDF/UA accessibility with a remediate stage
+
+The script already sends `nativeTaggedPdf=true`, so Chromium writes a tag structure (headings, lists, tables, images) from the page's HTML. A tagged PDF is not the same as a PDF/UA-conformant one.
+
+Gotenberg 9 can add a `remediate` stage to the request, which repairs the PDF toward a profile such as PDF/UA-1:
+
+```
+--form 'stages=[{"op":"remediate","profile":"PDF/UA-1"}]'
+```
+
+The response headers report how much it couldn't fix (`Gotenberg-Remediation-Residual`). This is a repair step, not a validator. A separate tool such as [veraPDF](https://verapdf.org/) is still needed to check conformance. Accessibility is the business driver, so this is worth testing.
+
+Things to look into:
+
+- Add an optional parameter to `Test-Gotenberg.ps1` that sends the remediate stage (untested so far).
+- Expect imperfect results. The output depends on the site's markup, such as alt text, heading order, and table structure.
