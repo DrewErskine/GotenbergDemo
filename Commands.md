@@ -24,7 +24,7 @@ Edit `sample\urls.txt`: one URL per line. Blank lines and lines starting with `#
 
 ## 2. Run
 
-Starts `gotenberg/gotenberg:8.34.0`, renders every URL in `sample\urls.txt`, then removes the container.
+Starts `gotenberg/gotenberg:9.6.0`, renders every URL in `sample\urls.txt`, then removes the container.
 
 ```powershell
 .\Test-Gotenberg.ps1
@@ -73,7 +73,7 @@ cd C:\10.4\docker ; docker compose restart traefik
 | `-UrlListPath` | Text file of URLs to render | `sample\urls.txt` |
 | `-GotenbergUrl` | Base URL of the Gotenberg instance | `http://localhost:3000` |
 | `-SkipContainerStart` | Don't start or stop a local container | off |
-| `-ImageTag` | Pinned Gotenberg image | `gotenberg/gotenberg:8.34.0` |
+| `-ImageTag` | Pinned Gotenberg image | `gotenberg/gotenberg:9.6.0` |
 | `-KeepRunning` | Leave the container running afterward | off |
 
 ## 5. Run with Docker Compose (hardened service)
@@ -102,7 +102,7 @@ Against a running instance (use `curl.exe`, not the `curl` alias).
 curl.exe --request POST http://localhost:3000/forms/chromium/convert/url `
   --form url=https://www.michigan.gov/mdhhs `
   --form emulatedMediaType=print --form printBackground=true `
-  --form generateTaggedPdf=true --form waitDelay=2s -o output\manual-url.pdf
+  --form nativeTaggedPdf=true --form waitDelay=2s -o output\manual-url.pdf
 ```
 
 ## 7. Cleanup

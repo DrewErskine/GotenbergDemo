@@ -6,8 +6,8 @@
 # NOTE: This is a LINUX container. It cannot join the Windows-container Sitecore
 #       compose stack in C:\10.4\docker. See README.md section 2.
 #
-# All flags below were verified against 8.34.0 with:
-#   docker run --rm gotenberg/gotenberg:8.34.0 gotenberg --help
+# All flags below were verified against 9.6.0 with:
+#   docker run --rm gotenberg/gotenberg:9.6.0 gotenberg --help
 #
 # IMPORTANT: the "gotenberg" binary name MUST be the first element of `command`.
 # Passing bare flags fails at startup with:
@@ -15,19 +15,17 @@
 
 services:
   gotenberg:
-    # PIN AN EXPLICIT PATCHED VERSION. Do not use the floating ":8" tag.
+    # PIN AN EXPLICIT PATCHED VERSION. Do not use the floating ":9" tag.
     # Check https://github.com/gotenberg/gotenberg/releases before deploying.
-    # Known fix floors: 8.33 (path traversal), 8.34 (LibreOffice SSRF),
-    # plus later 8.x for the RCE/SSRF/auth-bypass cluster.
+    # 8.40.0 was the final 8.x release, so 8.x gets no further fixes.
     #
-    # VARIANT CHOICE (README section 3a) - all variants include PDF Engines, so
-    # merge (AC8) works in every one. The real trade-off:
-    #   :8           full      - adds PDF/A & PDF/UA CONVERSION (accessibility
-    #                            driver) but carries LibreOffice.
-    #   :8-chromium  ~30% less - URL/HTML->PDF + merge only. NO PDF/A / PDF/UA
-    #                            conversion. Chromium's generateTaggedPdf
-    #                            (tagged PDF) still works.
-    image: gotenberg/gotenberg:8.34.0
+    # VARIANT CHOICE (README section 3a) - in 9 every variant processes PDFs with
+    # litho (merge, PDF/A, PDF/UA via a "remediate" stage). They differ only in
+    # the conversion engines they carry:
+    #   :9           full      - web pages and office documents.
+    #   :9-chromium  smaller   - web pages and screenshots only (no LibreOffice).
+    #                            Chromium's nativeTaggedPdf (tagged PDF) works.
+    image: gotenberg/gotenberg:9.6.0
 
     container_name: gotenberg
 
@@ -63,8 +61,8 @@ services:
 
       # --- Disable unused, CVE-prone features ------------------------------------
       - "--api-disable-download-from"      # downloadFrom was an SSRF vector
-      # Uncomment if office-document conversion is not needed. NOTE: this also
-      # removes PDF/A & PDF/UA conversion (README section 3a).
+      # Uncomment if office-document conversion is not needed. In 9 this no
+      # longer affects PDF/A or PDF/UA (litho does those; README section 3a).
       # - "--libreoffice-disable-routes"
 
       # --- Operational -----------------------------------------------------------

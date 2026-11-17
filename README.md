@@ -67,7 +67,7 @@ the API shape and basic output quality:
 curl.exe --request POST https://demo.gotenberg.dev/forms/chromium/convert/url `
   --form url=https://example.com `
   --form emulatedMediaType=print --form printBackground=true `
-  --form generateTaggedPdf=true -o demo-url.pdf
+  --form nativeTaggedPdf=true -o demo-url.pdf
 ```
 
 **Use it only with public, non-sensitive pages.** Hard limits and cautions:
@@ -114,7 +114,7 @@ WINHOST=$(ip route show default | awk '{print $3}'); echo "Windows host: $WINHOS
 #    tolerating Traefik's self-signed certificate (LOCAL TESTING ONLY)
 sudo docker run -d --name gotenberg -p 3000:3000 \
   --add-host "cm.michigan.local:$WINHOST" \
-  gotenberg/gotenberg:8.34.0 \
+  gotenberg/gotenberg:9.6.0 \
   gotenberg --chromium-ignore-certificate-errors
 
 # 5. Smoke test from inside WSL
@@ -166,7 +166,8 @@ cd C:\GotenbergDemo ; .\Test-Gotenberg.ps1
 
 ## 3. SECURITY — read before deploying anywhere reachable
 
-Gotenberg has a significant recent CVE history:
+Gotenberg has a significant recent CVE history. These were all fixed in the 8.x line, which ended
+at 8.40.0. This project now pins **9.6.0**; check the releases page for 9.x advisories at deploy time.
 
 | CVE | Issue | Fixed in |
 |---|---|---|
@@ -182,7 +183,7 @@ _CVE summaries paraphrased from advisory sources for licensing compliance._
 
 **Mandatory controls for any non-throwaway deployment:**
 
-1. **Pin an explicit patched version.** Do **not** use the floating `:8` tag. Check the
+1. **Pin an explicit patched version.** Do **not** use the floating `:9` tag. Check the
    [releases page](https://github.com/gotenberg/gotenberg/releases) for the current version at
    deploy time and pin it. Treat this as a recurring patch obligation.
 2. **Never expose it publicly.** Private subnet / VNet-integrated only, with an NSG or access
@@ -200,40 +201,43 @@ _CVE summaries paraphrased from advisory sources for licensing compliance._
 5. **Disable unused features.** The `downloadFrom` and `webhook` features are the documented SSRF
    vectors. _Verify exact flag names against the pinned version's docs — they have changed across
    releases._
-6. **Choose the image variant deliberately** — see §3a. It is both a security-surface and a
-   capability decision.
+6. **Choose the image variant deliberately** — see §3a. In 9 it is a security-surface decision.
 
 The vendor's own installation guidance says the same thing in plainer terms: do not expose Gotenberg
 to the public internet; treat it like a database and keep it behind the firewall.
 
 ---
 
-## 3a. Image variant decision (security surface vs PDF/UA capability)
+## 3a. Image variant decision (security surface)
 
-Gotenberg ships three variants. All of them include **PDF Engines**, so **merge (AC8) is available
-in every variant** — no need to validate that separately.
+In Gotenberg 9, **every variant processes PDFs with litho** (merge, split, stamp, PDF/A, PDF/UA), so
+the 8.x trade-off no longer applies: the slim image does **not** lose PDF/A or PDF/UA. The variants
+differ only in the conversion engines they carry
+([installation docs](https://gotenberg.dev/docs/getting-started/installation)).
 
-| Variant | Size | URL/HTML → PDF | Merge/split/watermark | **PDF/A & PDF/UA conversion** | Office docs |
-|---|---|---|---|---|---|
-| `gotenberg/gotenberg:8` | Full | ✅ | ✅ | ✅ | ✅ |
-| `gotenberg/gotenberg:8-chromium` | ~30% smaller | ✅ | ✅ | **❌** | ❌ |
-| `gotenberg/gotenberg:8-libreoffice` | ~40% smaller | ❌ | ✅ | ✅ | ✅ |
+| Variant | Converts | PDF processing (merge, PDF/A, PDF/UA) |
+|---|---|---|
+| `gotenberg/gotenberg:9` | Web pages and office documents | ✅ |
+| `gotenberg/gotenberg:9-chromium` | Web pages, screenshots | ✅ |
+| `gotenberg/gotenberg:9-libreoffice` | Office documents | ✅ |
 
-**The trade-off that matters for this ticket:**
+A route whose engine the image lacks answers 404.
 
-- **`8-chromium`** covers everything the ACs strictly need — URL/HTML→PDF (AC2/AC3) and merge (AC8) —
-  with a **smaller attack surface**. Dropping LibreOffice also removes the route implicated in
-  **CVE-2026-55229** entirely. **But it cannot do PDF/A or PDF/UA conversion.**
-- **Full `8`** adds **PDF/A & PDF/UA conversion**, which is directly relevant because accessibility is
-  the business driver — at the cost of carrying LibreOffice.
+**What matters for this ticket:**
 
-**Important distinction:** Chromium's `generateTaggedPdf` option produces a **tagged** PDF and works
-in `8-chromium`. What the slim variant loses is PDF/A and **PDF/UA conversion** (a separate
-post-processing step that needs LibreOffice). Tagged ≠ PDF/UA-conformant — see research §2.6.
+- **`9-chromium`** covers everything the ACs need (URL/HTML→PDF for AC2/AC3, merge for AC8) with a
+  **smaller attack surface**. Dropping LibreOffice also removes the LibreOffice routes, including the
+  one implicated in **CVE-2026-55229**.
+- Full **`9`** only adds office-document conversion, which this ticket does not use.
 
-**POC recommendation:** use the **full image** so nothing is missing while testing, and measure
-whether PDF/UA conversion actually improves the output enough to justify keeping LibreOffice in
-production. Decide the production variant from that evidence.
+**Important distinction:** Chromium's `nativeTaggedPdf` option produces a **tagged** PDF and works in
+every Chromium variant. In 9, Chromium no longer makes PDF/A on its own: add a `remediate` stage
+(for example `{"op":"remediate","profile":"PDF/UA-1"}`) in `stages`. Tagged ≠ PDF/UA-conformant — see
+research §2.6.
+
+**POC recommendation:** the harness runs the full image. Switching to `9-chromium` is the likely
+production choice, since it carries less and loses nothing this ticket needs. _This was not tested
+here: confirm with a run on `9-chromium` before committing to it._
 
 ### Other deployment notes from the vendor docs
 
@@ -243,7 +247,7 @@ production. Decide the production variant from that evidence.
 - Resource floor: **≥ 512Mi memory and 0.2 CPU**; ≥ 1Gi recommended for comfortable operation. Our
   compose sets a 2G ceiling — tune against real guidance pages and the AC6 batch size.
 - In a shared Compose network, other services reach it at **`gotenberg:3000`**.
-- Preconfigured variants exist for **Cloud Run** and **AWS Lambda (beta)**, which is a good signal
+- Preconfigured variants exist for **Cloud Run** and **AWS Lambda**, which is a good signal
   that Azure App Service for Containers / Container Apps will host it without friction.
 
 This CVE history is a legitimate input to the Approach A vs B decision and belongs in the security
