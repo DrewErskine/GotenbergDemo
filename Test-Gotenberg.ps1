@@ -39,7 +39,7 @@ param(
     [string]$UrlListPath = "sample\urls.txt",
     [string]$GotenbergUrl = "http://localhost:3000",
     [switch]$SkipContainerStart,
-    [string]$ImageTag = "gotenberg/gotenberg:8.34.0",
+    [string]$ImageTag = "gotenberg/gotenberg:9.6.0",
     [switch]$KeepRunning
 )
 
@@ -206,7 +206,7 @@ foreach ($u in $urls) {
         '--form',"url=$u",
         '--form','emulatedMediaType=print',
         '--form','printBackground=true',
-        '--form','generateTaggedPdf=true',
+        '--form','nativeTaggedPdf=true',
         '--form',"paperWidth=$paperWidth",
         '--form',"paperHeight=$paperHeight",
         # Lazy-loaded images and page-break CSS (see $lazyImageExpression above).

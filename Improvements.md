@@ -47,7 +47,7 @@ Things to look into:
 
 - Ask team why the hero is hidden in print, and whether it should show in PDFs.
 - Decide whether PDFs should include the hero, or keep the print behavior.
-- If the hero should show, either change the print stylesheet on the site, override the rule in the script, or expend .
+- If the hero should show, either change the print stylesheet on the site, override the rule in the script, or switch to `emulatedMediaType=screen` and expand the accordions with injected CSS.
 
 ### 5. PDF/UA accessibility with a remediate stage
 
@@ -65,3 +65,37 @@ Things to look into:
 
 - Add an optional parameter to `Test-Gotenberg.ps1` that sends the remediate stage (untested so far).
 - Expect imperfect results. The output depends on the site's markup, such as alt text, heading order, and table structure.
+
+### 6. Hide site chrome (sitewide alert, main nav, etc.) from the PDF
+
+The generated PDFs currently include the sitewide alert and the main navigation. These can be hidden or removed from the PDF. Whether they should be is a business decision, so the script does not do it yet. More elements will likely be added to this list over time (for example the header, footer, or breadcrumb).
+
+To hide them, define this variable in `Test-Gotenberg.ps1`:
+
+```powershell
+# CSS for site chrome (page elements that are not content) to leave out of the PDF.
+# Add more selectors to this list as needed. Currently it hides:
+#  - Alerts (sitewide and page-level): the section with an alertid attribute.
+#  - Main nav: the whole wrapper section (":has"), so no empty gap is left behind, plus the
+#    desktop menu, mobile menu and megamenu panels by id/class as a fallback.
+# No single quotes allowed in this string: it is placed inside a JavaScript string below.
+$hideChromeCss = "section.important-information-box__section[alertid] { display: none !important; } section.component-wrapper:has(#menuA), section.component-wrapper:has(#menuAmobile), #menuA, #menuAmobile, .megamenu, .navigation-main, .navigation-toggle { display: none !important; }"
+```
+
+Then add it to the CSS that the script injects. In `$lazyImageExpression`, change `s.textContent = '$printFixCss';` to:
+
+```powershell
+s.textContent = '$printFixCss $hideChromeCss';
+```
+
+Things to look into:
+
+- business decision on which elements to leave out of the PDF, and add each one to `$hideChromeCss`.
+- We could add the site-side option print rule that hides these elements, which would also affect browser printing.
+```css
+@media print {
+    .{Sitewide Alert/BreadCrumb/Whatever should be hidden} section {
+        display: none !important;
+    }
+}
+```
