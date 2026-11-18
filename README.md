@@ -1,305 +1,192 @@
-# Gotenberg POC / Demo — CM Auto-Generate PDF
+# Gotenberg POC — CM Auto-Generate PDF
 
 Supporting POC for research ticket **INC000011288638**
 (research doc: `C:\10.4\docs\research-cm-auto-generate-pdf.md`).
 
-Validates **Approach A** — a headless-Chromium rendering engine — using **Gotenberg** (MIT,
-free for government use).
+Validates **Approach A**, a headless-Chromium rendering engine, using **Gotenberg** (MIT).
+Run commands are in [`Commands.md`](Commands.md). Open items are in [`Improvements.md`](Improvements.md).
 
 ---
 
-## 1. Answering the two setup questions
+## 1. Deployment
 
-### "Can we run this as a side microservice on a Linux VM?"
+Gotenberg is a **stateless HTTP API** distributed **only as a Linux container image** (no binary,
+MSI or apt package). Each request is independent, so it scales horizontally and restarts cleanly.
 
-**Yes — that is Gotenberg's intended deployment model.** It is a **stateless HTTP API**: no
-database, no session state, no persistence. Each request is independent, so it scales horizontally
-and restarts cleanly.
-
-One constraint to know up front: **Gotenberg is distributed only as a container image.** There is
-no standalone binary, MSI, or apt package. So "a Linux VM running Gotenberg" means Docker/Podman on
-that VM — or a managed container service that runs the image for you.
-
-| Host option | Fit for SOM | Notes |
+| Host option | Fit | Notes |
 |---|---|---|
-| **Azure App Service for Containers (Linux)** | ✅ **Strong** | Mirrors the existing Playwright UI-test Web App pattern. Managed TLS, VNet integration, no VM patching. |
-| **Azure Container Instances (ACI)** | ✅ Good | Fastest to stand up; good for the dev/POC tier. |
-| **Azure Container Apps** | ✅ Good | Adds scale-to-zero and revisions; more moving parts. |
-| **Linux VM + Docker** | ⚠️ Works | Full control, but you own OS patching, Docker upgrades, and hardening. |
-| **The Windows-container Sitecore compose stack** | ❌ **Not possible** | Gotenberg is a Linux image; that stack is Windows containers. See §2. |
+| **Azure App Service for Containers (Linux)** | ✅ Strong | Mirrors the existing Playwright UI-test Web App pattern. Managed TLS, VNet integration, no VM patching. |
+| **Azure Container Instances** | ✅ Good | Fastest to stand up; good for the dev tier. |
+| **Azure Container Apps** | ✅ Good | Scale-to-zero and revisions; more moving parts. |
+| **Linux VM + Docker** | ⚠️ Works | You own OS patching, Docker upgrades and hardening. |
+| **Windows-container Sitecore compose stack** | ❌ Not possible | Gotenberg is a Linux image; that stack is Windows containers. |
 
-**Key consequence:** because Gotenberg lives outside the Sitecore compose stack, the
-Windows/Linux container conflict is only a **local-dev inconvenience**, not an architectural
-problem. Once a dev-tier instance exists, local developers point CM at it and never run Gotenberg
-on their own machine.
-
-### "We only use Docker for local environments"
-
-That is compatible — just note the distinction:
-- **Gotenberg always runs as a container** (its only distribution format).
-- But **you don't have to manage Docker** if you use App Service for Containers / ACI / Container
-  Apps. Azure pulls and runs the image; you supply the image reference and configuration.
+Because Gotenberg runs outside the Sitecore stack, the Windows/Linux conflict is only a local-dev
+inconvenience. Once a dev-tier instance exists, developers point CM at it and never run Gotenberg
+locally. With a managed service, you don't manage Docker yourself; Azure runs the image.
 
 ---
 
-## 2. Why it can't go in the Sitecore compose stack
+## 2. Running it locally
 
-Verified on this machine:
+Docker Desktop here is in Windows-container mode (Sitecore + Traefik), and Gotenberg needs Linux
+containers. Options:
 
-| Check | Value |
-|---|---|
-| Docker server platform | **windows** (hyperv isolation), v28.3.2 |
-| Docker Desktop | Installed |
-| WSL distributions | **none installed** |
-| Sitecore stack | Running & healthy — cm, cd, id, solr, mssql, redis, sps |
+| Option | Use for | Notes |
+|---|---|---|
+| **1. Dev-tier instance in Azure** (recommended) | Everything | Matches the target architecture. Run the harness with `-GotenbergUrl ... -SkipContainerStart`. |
+| **2. WSL2 + Docker in WSL** | Rendering CM URLs | Independent of the Docker Desktop mode, so Sitecore keeps working. |
+| **3. Switch Docker to Linux containers** | Public pages only | Sitecore keeps running, but CM becomes unreachable (see below). |
+| **0. Hosted demo** (`demo.gotenberg.dev`) | A first look at output quality | Public third-party service. **Never send real or draft CM content** (violates AC11/AC12). Limits: 512 MB RAM, 2 requests/sec, 5 MB body. |
 
-Gotenberg's image is Debian-based (Chromium + LibreOffice). Linux containers need a Linux kernel;
-Windows containers need the Windows kernel. Docker serves one platform at a time, so the two cannot
-coexist in one compose stack.
+**Option 3 limitation:** Traefik finds its routes through the Docker named pipe
+(`npipe:////./pipe/docker_engine`). Switching to Linux re-points that pipe, so Traefik sees no
+containers and `https://cm.michigan.local` answers 404. After switching back, restart Traefik if
+routes don't return: `cd C:\10.4\docker ; docker compose restart traefik`.
 
-### Option 0 — Hosted demo instance (fastest signal, ~60 seconds, no install)
-
-Gotenberg runs a public demo at `https://demo.gotenberg.dev`. This is the quickest way to confirm
-the API shape and basic output quality:
-
-```powershell
-# URL -> PDF
-curl.exe --request POST https://demo.gotenberg.dev/forms/chromium/convert/url `
-  --form url=https://example.com `
-  --form emulatedMediaType=print --form printBackground=true `
-  --form nativeTaggedPdf=true -o demo-url.pdf
-```
-
-**Use it only with public, non-sensitive pages.** Hard limits and cautions:
-
-| Limit | Impact |
-|---|---|
-| **Third-party hosted service** | ❌ **Never send real guidance-page or draft CM content.** Same architectural objection the research raises against PDFShift/SnapRender — content leaving the environment violates **AC11/AC12**. |
-| Cannot reach `cm.michigan.local` | ❌ Authenticated draft preview rendering (§6.3 — the highest-risk unknown) is impossible. |
-| 512 MB RAM / 0.5 CPU | ❌ No realistic resource or batch sizing. |
-| 2 requests/sec per IP, 5 MB body | ❌ Cannot exercise the 20–30 page batch (AC6). |
-
-**Verdict:** fine for a first look at fidelity and the print-CSS expansion behaviour; useless
-for the two questions that actually carry risk (CM draft auth and batch scale). Self-host for those.
-
-### Local options to actually run the POC
-
-**Option 1 — Dev-tier instance in Azure (recommended, matches the target architecture).**
-Deploy the image to ACI or App Service for Containers, then point this harness at it:
-```powershell
-.\Test-Gotenberg.ps1 -GotenbergUrl "https://gotenberg-dev.internal.example" -SkipContainerStart
-```
-No local disruption, and it validates the real deployment shape.
-
-**Option 2 — WSL2 + Docker in WSL (the only local way to test CM URLs).** ✅
-
-WSL2 runs **independently of the Docker Desktop engine mode**, so Docker Desktop stays in
-**Windows-container** mode and Sitecore + Traefik keep working normally. This is the only local
-option that can render authenticated **CM preview URLs** (research §6.3 — the highest-risk unknown).
+**Option 2 setup** (the only local way to test CM URLs):
 
 ```powershell
-# 1. Windows (admin) - keep Docker Desktop in WINDOWS container mode
-wsl --install -d Ubuntu          # may require a reboot
+wsl --install -d Ubuntu          # admin; may require a reboot
 ```
 
 ```bash
-# 2. Inside Ubuntu
+# Inside Ubuntu
 sudo apt-get update && sudo apt-get install -y docker.io
 sudo service docker start
 
-# 3. Resolve the Windows host IP (WSL's default gateway in NAT mode)
-WINHOST=$(ip route show default | awk '{print $3}'); echo "Windows host: $WINHOST"
+# Windows host IP (WSL's default gateway in NAT mode)
+WINHOST=$(ip route show default | awk '{print $3}')
 
-# 4. Run Gotenberg, mapping cm.michigan.local to the Windows host and
-#    tolerating Traefik's self-signed certificate (LOCAL TESTING ONLY)
+# Map cm.michigan.local to the Windows host; accept Traefik's self-signed cert (LOCAL ONLY)
 sudo docker run -d --name gotenberg -p 3000:3000 \
   --add-host "cm.michigan.local:$WINHOST" \
   gotenberg/gotenberg:9.6.0 \
   gotenberg --chromium-ignore-certificate-errors
-
-# 5. Smoke test from inside WSL
-curl -s -o /dev/null -w '%{http_code}\n' http://localhost:3000/health
 ```
 
+Then, from Windows, with the CM URLs in `sample\urls.txt` (WSL2 forwards `localhost`):
+
 ```powershell
-# 6. Back on Windows - WSL2 forwards localhost, so the harness just works.
-#    Put the CM URLs in sample\urls.txt first.
-cd C:\GotenbergDemo
 .\Test-Gotenberg.ps1 -SkipContainerStart
 ```
 
-Expect to wrestle the self-signed certificate and **CM authentication** — a 404/401/redirect-to-login
-in the resulting PDF *is* the finding for research §6.3, and it is exactly what needs solving
-(preview session cookie vs SSC token vs service account).
-
-**Option 3 — Switch Docker to Linux containers (tool validation only).**
-
-Switching engines does **not** stop the Sitecore containers — Docker Desktop's prompt confirms they
-keep running, you just can't *manage* them until you switch back. **No `.\down.ps1` needed.**
-
-```powershell
-& 'C:\Program Files\Docker\Docker\DockerCli.exe' -SwitchLinuxEngine
-cd C:\GotenbergDemo ; .\Test-Gotenberg.ps1
-& 'C:\Program Files\Docker\Docker\DockerCli.exe' -SwitchWindowsEngine   # regain CLI control
-```
-
-> ⚠️ **VERIFIED LIMITATION: CM becomes unreachable in Linux mode, so Option 3 cannot test CM URLs.**
->
-> Traefik discovers its routes through the Docker named pipe:
-> ```yaml
-> --providers.docker.endpoint=npipe:////./pipe/docker_engine
-> ```
-> When Docker Desktop switches to Linux, that pipe is **re-pointed to the Linux daemon**. Traefik
-> stays alive but now sees zero containers, so it drops every dynamic route. The symptom is a
-> **404 from `https://cm.michigan.local/sitecore`** (Traefik answering, but with no matching route)
-> rather than a connection error. CM/CD/SQL are still running — just unroutable by hostname.
->
-> **After switching back to Windows mode**, routes should return once the pipe is restored. If they
-> don't, restart Traefik:
-> ```powershell
-> cd C:\10.4\docker ; docker compose restart traefik
-> ```
-> **To test CM + Gotenberg together, use Option 2 (WSL2)** — it is independent of the Docker Desktop
-> engine mode, so Sitecore and Traefik keep working normally.
+Expect to deal with the self-signed certificate and **CM authentication**. A 404, 401 or login
+redirect in the PDF *is* the finding for research §6.3 (preview session cookie vs SSC token vs
+service account).
 
 ---
 
-## 3. SECURITY — read before deploying anywhere reachable
+## 3. Security — read before deploying anywhere reachable
 
-Gotenberg has a significant recent CVE history. These were all fixed in the 8.x line, which ended
-at 8.40.0. This project now pins **9.6.0**; check the releases page for 9.x advisories at deploy time.
+Gotenberg has a significant recent CVE history. These were fixed in the 8.x line, which ended at
+8.40.0. This project pins **9.6.0**; check the releases page for 9.x advisories at deploy time.
 
 | CVE | Issue | Fixed in |
 |---|---|---|
-| **CVE-2026-40281** | **Unauthenticated RCE** via argument injection — public PoC exploit exists | after 8.30.1 |
-| CVE-2026-42595 | SSRF — Chromium follows redirects to internal targets without re-validating | later 8.x |
-| CVE-2026-42596 | Unauthenticated SSRF — deny-list bypass (e.g. IPv6-mapped loopback) | later 8.x |
-| CVE-2026-40280 / 27018 | Auth-bypass — case-sensitive deny-list regex bypassed by `HTTP://` | later 8.x |
-| CVE-2026-42594 | Unauthenticated DoS — webhook goroutine panic | later 8.x |
+| **CVE-2026-40281** | **Unauthenticated RCE** via argument injection; public PoC exists | after 8.30.1 |
+| CVE-2026-42595 | SSRF: Chromium follows redirects to internal targets without re-validating | later 8.x |
+| CVE-2026-42596 | Unauthenticated SSRF: deny-list bypass (e.g. IPv6-mapped loopback) | later 8.x |
+| CVE-2026-40280 / 27018 | Auth bypass: case-sensitive deny-list regex bypassed by `HTTP://` | later 8.x |
+| CVE-2026-42594 | Unauthenticated DoS: webhook goroutine panic | later 8.x |
 | CVE-2026-44829 | Path traversal via crafted zip entry names | 8.33 |
 | CVE-2026-55229 | SSRF in `/forms/libreoffice/convert` | 8.34 |
 
 _CVE summaries paraphrased from advisory sources for licensing compliance._
 
-**Mandatory controls for any non-throwaway deployment:**
+**Controls for any non-throwaway deployment** (all set in `docker-compose.yml`):
 
-1. **Pin an explicit patched version.** Do **not** use the floating `:9` tag. Check the
-   [releases page](https://github.com/gotenberg/gotenberg/releases) for the current version at
-   deploy time and pin it. Treat this as a recurring patch obligation.
-2. **Never expose it publicly.** Private subnet / VNet-integrated only, with an NSG or access
-   restriction permitting **only the CM host**. There must be no public ingress.
-3. **Enable its built-in basic auth.** Gotenberg **does** ship authentication — it is just **off by
-   default**. Use `--api-enable-basic-auth` with the `GOTENBERG_API_BASIC_AUTH_USERNAME` /
-   `GOTENBERG_API_BASIC_AUTH_PASSWORD` environment variables (source them from Key Vault / pipeline
-   secrets). Treat this as defence-in-depth on top of network isolation, not a replacement.
-   _(Corrects an earlier assumption in this document that Gotenberg had no auth.)_
-4. **Constrain what it may fetch** using `--chromium-allow-list` so it can only reach the CM
-   preview host — the primary SSRF mitigation, directly supporting AC12. Also enable the
-   **resolve-then-check** guards `--api-download-from-deny-private-ips` and
-   `--webhook-deny-private-ips`; these inspect the *resolved IP* and so defeat the regex-bypass
-   class of CVEs (mixed-case schemes, IPv6-mapped loopback, redirects) that plain deny-lists missed.
-5. **Disable unused features.** The `downloadFrom` and `webhook` features are the documented SSRF
-   vectors. _Verify exact flag names against the pinned version's docs — they have changed across
-   releases._
-6. **Choose the image variant deliberately** — see §3a. In 9 it is a security-surface decision.
+1. **Pin an explicit patched version.** Never use the floating `:9` tag. Check the
+   [releases page](https://github.com/gotenberg/gotenberg/releases) at deploy time and treat
+   patching as a recurring obligation.
+2. **Never expose it publicly.** Private subnet or VNet only, with access restricted to the CM host.
+   The vendor says the same: keep it behind the firewall, like a database.
+3. **Enable basic auth.** It is off by default. Use `--api-enable-basic-auth` with
+   `GOTENBERG_API_BASIC_AUTH_USERNAME` / `GOTENBERG_API_BASIC_AUTH_PASSWORD` from Key Vault or
+   pipeline secrets. This is defence in depth, not a replacement for network isolation.
+4. **Constrain what it may fetch** with `--chromium-allow-list` (the primary SSRF mitigation,
+   supporting AC12). Also enable the resolve-then-check guards `--api-download-from-deny-private-ips`
+   and `--webhook-deny-private-ips`, which inspect the resolved IP and so defeat the regex-bypass
+   class of CVEs.
+5. **Disable unused features** (`--api-disable-download-from`). Flag names change between releases,
+   so verify them against the pinned version with `gotenberg --help`. All flags in the compose file
+   were verified against 9.6.0.
+6. **Choose the image variant deliberately** (below).
 
-The vendor's own installation guidance says the same thing in plainer terms: do not expose Gotenberg
-to the public internet; treat it like a database and keep it behind the firewall.
+The CVE history belongs in the Approach A vs B security review. It does not disqualify Gotenberg,
+since it is actively maintained and these were patched, but **network isolation and a patch cadence
+are non-negotiable**.
 
----
+### Image variant
 
-## 3a. Image variant decision (security surface)
+In Gotenberg 9, every variant processes PDFs with litho (merge, split, stamp, PDF/A, PDF/UA). The
+variants differ only in the conversion engines they carry
+([docs](https://gotenberg.dev/docs/getting-started/installation)). A route whose engine the image
+lacks answers 404.
 
-In Gotenberg 9, **every variant processes PDFs with litho** (merge, split, stamp, PDF/A, PDF/UA), so
-the 8.x trade-off no longer applies: the slim image does **not** lose PDF/A or PDF/UA. The variants
-differ only in the conversion engines they carry
-([installation docs](https://gotenberg.dev/docs/getting-started/installation)).
+| Variant | Converts |
+|---|---|
+| `gotenberg/gotenberg:9` | Web pages and office documents |
+| `gotenberg/gotenberg:9-chromium` | Web pages, screenshots |
+| `gotenberg/gotenberg:9-libreoffice` | Office documents |
 
-| Variant | Converts | PDF processing (merge, PDF/A, PDF/UA) |
-|---|---|---|
-| `gotenberg/gotenberg:9` | Web pages and office documents | ✅ |
-| `gotenberg/gotenberg:9-chromium` | Web pages, screenshots | ✅ |
-| `gotenberg/gotenberg:9-libreoffice` | Office documents | ✅ |
+`9-chromium` covers everything this ticket needs (URL/HTML to PDF, merge) with a smaller attack
+surface, and it drops the LibreOffice routes implicated in CVE-2026-55229. The harness currently
+runs the full image. `9-chromium` is the likely production choice, but **that is untested**: confirm
+with a run before committing.
 
-A route whose engine the image lacks answers 404.
+`nativeTaggedPdf` writes a **tagged** PDF in every Chromium variant. Tagged is not PDF/UA-conformant.
+Conformance needs a `remediate` stage (see `Improvements.md` item 5) and validation (research §2.6).
 
-**What matters for this ticket:**
-
-- **`9-chromium`** covers everything the ACs need (URL/HTML→PDF for AC2/AC3, merge for AC8) with a
-  **smaller attack surface**. Dropping LibreOffice also removes the LibreOffice routes, including the
-  one implicated in **CVE-2026-55229**.
-- Full **`9`** only adds office-document conversion, which this ticket does not use.
-
-**Important distinction:** Chromium's `nativeTaggedPdf` option produces a **tagged** PDF and works in
-every Chromium variant. In 9, Chromium no longer makes PDF/A on its own: add a `remediate` stage
-(for example `{"op":"remediate","profile":"PDF/UA-1"}`) in `stages`. Tagged ≠ PDF/UA-conformant — see
-research §2.6.
-
-**POC recommendation:** the harness runs the full image. Switching to `9-chromium` is the likely
-production choice, since it carries less and loses nothing this ticket needs. _This was not tested
-here: confirm with a run on `9-chromium` before committing to it._
-
-### Other deployment notes from the vendor docs
-
-- Runs as **non-root** (`gotenberg`, UID/GID 1001); arbitrary UIDs supported since 8.21.0.
-- Kubernetes `securityContext`: `readOnlyRootFilesystem: false`, `allowPrivilegeEscalation: false`,
-  `privileged: false`, `runAsUser: 1001`.
-- Resource floor: **≥ 512Mi memory and 0.2 CPU**; ≥ 1Gi recommended for comfortable operation. Our
-  compose sets a 2G ceiling — tune against real guidance pages and the AC6 batch size.
-- In a shared Compose network, other services reach it at **`gotenberg:3000`**.
-- Preconfigured variants exist for **Cloud Run** and **AWS Lambda**, which is a good signal
-  that Azure App Service for Containers / Container Apps will host it without friction.
-
-This CVE history is a legitimate input to the Approach A vs B decision and belongs in the security
-review. It does not disqualify Gotenberg — it is actively maintained and these were patched — but it
-does mean **network isolation plus a patch cadence are non-negotiable**.
+**Resources:** vendor floor is 512Mi memory and 0.2 CPU; 1Gi or more is recommended. The compose
+file sets a 2G / 2 CPU limit. Tune it against real pages and the AC6 batch size (20-30 pages).
 
 ---
 
-## 4. What the harness does
+## 4. Licensing
 
-The synthetic `print-test.html` page already confirmed the basics (JS executes, flexbox/grid
-render, print CSS expands hidden content, merge works), so it and its tests were removed.
-`Test-Gotenberg.ps1` now renders real pages: every URL in `sample/urls.txt` is converted to a PDF
-through Gotenberg's Chromium URL route (print media emulation, backgrounds, tagged PDF, 2 s wait).
-
-Edit `sample/urls.txt` (one URL per line; blank lines and `#` comments are ignored), then run:
-
-```powershell
-# Local container (requires Linux-container mode)
-.\Test-Gotenberg.ps1
-
-# Against an existing dev instance, no local container
-.\Test-Gotenberg.ps1 -GotenbergUrl "http://gotenberg-dev:3000" -SkipContainerStart
-
-# Use a different list, and leave the container running
-.\Test-Gotenberg.ps1 -UrlListPath sample\other-urls.txt -KeepRunning
-```
-
-Each PDF lands in `output/pages/` (gitignored), named after the last path segment of its URL:
-`.../composites/tabs` becomes `tabs.pdf`. A URL with no path uses the host name, and repeated
-names get `-2`, `-3`. The script exits with code 1 if any URL fails.
-
-Current test pages (`cmstest.michigan.gov/agencysite/components/...`): `accordions`, `tabs`,
-`promocardgroup`, `featureitem`, `timeline`.
-
-Not covered yet: pages that need a login. Gotenberg cannot authenticate by itself; cookies or
-headers must be passed per request, and the script does not do that yet (research §6.3).
+- **Gotenberg** is MIT licensed, in 8.x and 9.x ([LICENSE](https://github.com/gotenberg/gotenberg/blob/main/LICENSE)).
+- **Gotenberg 9 added litho**, a PDF engine that replaces pdfcpu, QPDF, pdftk and ExifTool. litho's
+  own repository is licensed **AGPL-3.0**. Per the [litho README](https://github.com/gotenberg/litho),
+  Gotenberg embeds litho and ships it under the MIT license, as its copyright owner allows, and
+  contributors sign a CLA granting that right. The AGPL applies to *other* uses of litho, such as
+  importing it into your own program. This project runs the Gotenberg image and calls its HTTP API,
+  so it is not that case.
+- **Not verified:** this rests on the vendor's statement. It is not legal advice, and the licenses of
+  other software in the image (Chromium, LibreOffice) were not audited. Have licensing review confirm
+  the v9 position before production use.
 
 ---
 
-## 5. How to judge the results
+## 5. What the harness does
+
+`Test-Gotenberg.ps1` converts every URL in `sample/urls.txt` (one per line; blank lines and `#`
+comments ignored) to a PDF through Gotenberg's Chromium URL route. Run commands and parameters are in
+`Commands.md`.
+
+- **Settings:** print media emulation, backgrounds, tagged PDF, a custom page size, and a wait that
+  loads lazy images (`Improvements.md` items 2 and 3).
+- **Output:** `output/pages/` (gitignored), named after the last path segment of the URL
+  (`.../composites/tabs` becomes `tabs.pdf`). A URL with no path uses the host name, and repeated
+  names get `-2`, `-3`. The script exits with code 1 if any URL fails.
+- **Current test pages** (`cmstest.michigan.gov/agencysite/components/...`): `accordions`, `tabs`,
+  `promocardgroup`, `featureitem`, `timeline`.
+- **Not covered yet:** pages that need a login. Gotenberg cannot authenticate by itself; cookies or
+  headers must be passed per request, and the script doesn't do that yet (research §6.3).
+
+An earlier synthetic page (`print-test.html`) confirmed the basics (JS runs, flexbox/grid render,
+print CSS expands hidden content, merge works) and was removed.
+
+### How to judge the results
 
 1. Open each PDF in `output/pages/` and compare it with the page in a browser.
 2. Check that **collapsed content is present**. `accordions.pdf` and `tabs.pdf` should show every
-   section and tab. If they are collapsed, the site needs a print stylesheet (or injected
-   CSS/JS) that expands them, which is the research §6.5 print-view idea.
-3. Check layout and styling: cards, grids, timeline, images and fonts should match the screen, and
-   navigation chrome should not dominate the output.
-4. If a PDF looks unstyled or is missing images, Chromium may have been blocked from loading
-   assets (allow-list) or could not reach a CDN.
-5. Optionally validate tagging with [veraPDF](https://verapdf.org/) and **expect imperfect PDF/UA**
-   (research §2.6). Do not promise a compliant PDF in either approach.
+   section and tab. If not, the page needs print CSS or injected CSS/JS to expand them (research §6.5).
+3. Check layout: cards, grids, timeline, images and fonts should match the screen.
+4. If a PDF is unstyled or missing images, Chromium may have been blocked by the allow-list or could
+   not reach a CDN.
+5. Optionally validate tagging with [veraPDF](https://verapdf.org/). **Expect imperfect PDF/UA**
+   (research §2.6) and don't promise a compliant PDF in either approach.
 
 ---
 
@@ -308,11 +195,12 @@ headers must be passed per request, and the script does not do that yet (researc
 | File | Purpose |
 |---|---|
 | `README.md` | This document |
-| `Commands.md` | Copy-paste commands to run the project |
+| `Commands.md` | Commands to run the project |
+| `Improvements.md` | Open items to look into |
 | `Test-Gotenberg.ps1` | POC harness: renders each URL in the list to a PDF |
-| `docker-compose.yml` | Hardened, version-pinned Gotenberg service for a Linux VM / dev tier |
-| `sample/urls.txt` | URLs to render, one per line |
-| `output/pages/` | Generated PDFs, named by last URL path segment (gitignored) |
+| `docker-compose.yml` | Hardened, version-pinned Gotenberg service for a Linux VM or dev tier |
+| `sample/urls.txt` | URLs to render |
+| `output/pages/` | Generated PDFs (gitignored) |
 
-Nothing here modifies the Sitecore solution, `docker-compose.yml` in `C:\10.4`, or any Sitecore
+Nothing here modifies the Sitecore solution, the `docker-compose.yml` in `C:\10.4`, or any Sitecore
 configuration.

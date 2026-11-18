@@ -19,7 +19,7 @@ services:
     # Check https://github.com/gotenberg/gotenberg/releases before deploying.
     # 8.40.0 was the final 8.x release, so 8.x gets no further fixes.
     #
-    # VARIANT CHOICE (README section 3a) - in 9 every variant processes PDFs with
+    # VARIANT CHOICE (README section 3, "Image variant") - in 9 every variant processes PDFs with
     # litho (merge, PDF/A, PDF/UA via a "remediate" stage). They differ only in
     # the conversion engines they carry:
     #   :9           full      - web pages and office documents.
@@ -62,7 +62,7 @@ services:
       # --- Disable unused, CVE-prone features ------------------------------------
       - "--api-disable-download-from"      # downloadFrom was an SSRF vector
       # Uncomment if office-document conversion is not needed. In 9 this no
-      # longer affects PDF/A or PDF/UA (litho does those; README section 3a).
+      # longer affects PDF/A or PDF/UA (litho does those; README section 3).
       # - "--libreoffice-disable-routes"
 
       # --- Operational -----------------------------------------------------------
