@@ -27,8 +27,19 @@
 .PARAMETER KeepRunning
     Leave the local Gotenberg container running after the run finishes.
 
+.PARAMETER Merge
+    After rendering, merge the PDFs into ONE file, in list order, with one bookmark per page.
+    The per-page PDFs get ordinal prefixes (01_, 02_, ...) because Gotenberg merges in
+    alphanumeric file-name order. If any page fails, the merge is skipped so no page is
+    silently dropped.
+
+.PARAMETER MergedName
+    File name of the merged PDF, written to output\. Default: merged.pdf. Used with -Merge.
+
 .EXAMPLE
     .\Test-Gotenberg.ps1
+.EXAMPLE
+    .\Test-Gotenberg.ps1 -UrlListPath sample\ebook-urls.txt -Merge -MergedName ebook.pdf
 .EXAMPLE
     .\Test-Gotenberg.ps1 -UrlListPath sample\other-urls.txt -KeepRunning
 .EXAMPLE
@@ -39,8 +50,10 @@ param(
     [string]$UrlListPath = "sample\urls.txt",
     [string]$GotenbergUrl = "http://localhost:3000",
     [switch]$SkipContainerStart,
-    [string]$ImageTag = "gotenberg/gotenberg:9.6.0",
-    [switch]$KeepRunning
+    [string]$ImageTag = "gotenberg/gotenberg:9.9.0",
+    [switch]$KeepRunning,
+    [switch]$Merge,
+    [string]$MergedName = 'merged.pdf'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -49,6 +62,11 @@ $ProgressPreference    = 'SilentlyContinue'
 $containerName = 'gotenberg-poc'
 $baseUrl       = $GotenbergUrl.TrimEnd('/')
 $pagesDir      = Join-Path $PSScriptRoot 'output\pages'
+
+# Merged PDF location. GetFileName() keeps -MergedName from pointing outside output\.
+$mergedFile = [IO.Path]::GetFileName($MergedName)
+if (-not $mergedFile.EndsWith('.pdf', [StringComparison]::OrdinalIgnoreCase)) { $mergedFile += '.pdf' }
+$mergedPath = Join-Path $PSScriptRoot "output\$mergedFile"
 
 function Write-Step { param($m) Write-Host "`n=== $m ===" -ForegroundColor Cyan }
 function Write-Ok   { param($m) Write-Host "  [PASS] $m" -ForegroundColor Green }
@@ -186,7 +204,14 @@ $lazyImageExpression = "(() => { if (!document.getElementById('pdf-print-fix')) 
 $paperWidth  = '1280px'
 $paperHeight = '1810px'
 
+# Ordinal prefix width for -Merge: at least 2 digits, wider for very long lists, so that
+# alphanumeric file-name order always equals list order (01_ ... 10_, not 1_ ... 10_).
+$pad        = [Math]::Max(2, "$($urls.Count)".Length)
+$n          = 0
+$mergeFiles = @()
+
 foreach ($u in $urls) {
+    $n++
     try { $uri = [Uri]$u; if (-not $uri.IsAbsoluteUri) { throw "relative" } }
     catch { Write-Fail "Invalid URL: $u"; $results[$u] = $false; continue }
 
@@ -201,7 +226,11 @@ foreach ($u in $urls) {
     if ($usedNames.ContainsKey($name)) { $usedNames[$name]++; $name = "$name-$($usedNames[$name])" }
     else { $usedNames[$name] = 1 }
 
-    $results[$u] = Invoke-Conversion -Name $u -OutFile (Join-Path $pagesDir "$name.pdf") -CurlArgs @(
+    # With -Merge the file name starts with the page's position in the list (01_, 02_, ...).
+    $fileName = if ($Merge) { "$($n.ToString("D$pad"))_$name.pdf" } else { "$name.pdf" }
+    $outFile  = Join-Path $pagesDir $fileName
+
+    $ok = Invoke-Conversion -Name $u -OutFile $outFile -CurlArgs @(
         '--request','POST',"$baseUrl/forms/chromium/convert/url",
         '--form',"url=$u",
         '--form','emulatedMediaType=print',
@@ -214,6 +243,31 @@ foreach ($u in $urls) {
         '--form-string',"waitForExpression=$lazyImageExpression",
         '--form','waitDelay=2s'
     )
+    $results[$u] = $ok
+    if ($ok) { $mergeFiles += $outFile }
+}
+
+# --- Merge (optional): one PDF, list order, one bookmark per page ---------------------
+if ($Merge) {
+    Write-Step "Merge into $mergedFile"
+
+    if (Test-Path $mergedPath) { Remove-Item $mergedPath -Force }
+
+    if ($mergeFiles.Count -ne $urls.Count) {
+        $missing = $urls.Count - $mergeFiles.Count
+        Write-Fail "Skipped: $missing page(s) failed. Merging now would silently drop them."
+        $results['Merge'] = $false
+    } else {
+        # Gotenberg merges in alphanumeric file-name order (not upload order), which is why the
+        # per-page files carry 01_, 02_ ... prefixes. fileBookmarks={} adds one bookmark per
+        # page, labelled with the PDF's title (or the file name if it has none).
+        $mergeArgs = @('--request','POST',"$baseUrl/forms/pdf/merge")
+        foreach ($f in $mergeFiles) { $mergeArgs += @('--form',"files=@`"$f`"") }
+        $mergeArgs += @('--form-string','fileBookmarks={}')
+
+        $results['Merge'] = Invoke-Conversion -Name "Merge ($($mergeFiles.Count) PDFs)" -OutFile $mergedPath -CurlArgs $mergeArgs
+        if ($results['Merge']) { Write-Info "Merged PDF: $mergedPath" }
+    }
 }
 
 # --- Summary -------------------------------------------------------------------------

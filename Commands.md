@@ -24,7 +24,7 @@ Edit `sample\urls.txt`: one URL per line. Blank lines and lines starting with `#
 
 ## 2. Run
 
-Starts `gotenberg/gotenberg:9.6.0`, renders every URL in `sample\urls.txt`, then removes the container.
+Starts `gotenberg/gotenberg:9.9.0`, renders every URL in `sample\urls.txt`, then removes the container.
 
 ```powershell
 .\Test-Gotenberg.ps1
@@ -44,6 +44,20 @@ Use a different list or an existing instance:
 .\Test-Gotenberg.ps1 -GotenbergUrl "http://<dev-host>:3000" -SkipContainerStart
 .\Test-Gotenberg.ps1 -KeepRunning
 ```
+
+## 2a. Merge several pages into one PDF (eBook)
+
+`sample\ebook-urls.txt` lists the eBook pages in reading order. With `-Merge`, each page is rendered to `output\pages\01_...pdf`, `02_...pdf` and so on, then merged into one PDF with one bookmark per page.
+
+```powershell
+.\Test-Gotenberg.ps1 -UrlListPath sample\ebook-urls.txt -Merge -MergedName ebook.pdf
+```
+
+- Output: `output\ebook.pdf`.
+- Order follows the URL list. The `01_`, `02_` prefixes exist because Gotenberg merges by file name, not upload order.
+- If any page fails, the merge is skipped so no page is silently dropped.
+- Bookmark labels come from each page's HTML title.
+- Needs Gotenberg 9.7.0 or later (`fileBookmarks`).
 
 ## 3. Switch Docker engines (the Sitecore stack uses Windows mode)
 
@@ -73,7 +87,9 @@ cd C:\10.4\docker ; docker compose restart traefik
 | `-UrlListPath` | Text file of URLs to render | `sample\urls.txt` |
 | `-GotenbergUrl` | Base URL of the Gotenberg instance | `http://localhost:3000` |
 | `-SkipContainerStart` | Don't start or stop a local container | off |
-| `-ImageTag` | Pinned Gotenberg image | `gotenberg/gotenberg:9.6.0` |
+| `-ImageTag` | Pinned Gotenberg image | `gotenberg/gotenberg:9.9.0` |
+| `-Merge` | Merge the rendered pages into one PDF, in list order, with a bookmark per page | off |
+| `-MergedName` | File name of the merged PDF, written to `output\` | `merged.pdf` |
 | `-KeepRunning` | Leave the container running afterward | off |
 
 ## 5. Run with Docker Compose (hardened service)

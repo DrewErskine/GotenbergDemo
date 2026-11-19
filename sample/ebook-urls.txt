@@ -1,0 +1,8 @@
+# eBook pages, in reading order. Use with -Merge to build one PDF:
+#   .\Test-Gotenberg.ps1 -UrlListPath sample\ebook-urls.txt -Merge -MergedName ebook.pdf
+# The merged PDF follows the order of this list.
+https://cmstest.michigan.gov/baseline/pages/ebook-landing-page
+https://cmstest.michigan.gov/baseline/pages/ebook-landing-page/20260625-ebook-page
+https://cmstest.michigan.gov/baseline/pages/ebook-landing-page/ebook-folder/ebook-page
+https://cmstest.michigan.gov/baseline/pages/ebook-landing-page/ebook-hero-example
+https://cmstest.michigan.gov/baseline/pages/ebook-landing-page/what-can-i-make

@@ -61,7 +61,7 @@ WINHOST=$(ip route show default | awk '{print $3}')
 # Map cm.michigan.local to the Windows host; accept Traefik's self-signed cert (LOCAL ONLY)
 sudo docker run -d --name gotenberg -p 3000:3000 \
   --add-host "cm.michigan.local:$WINHOST" \
-  gotenberg/gotenberg:9.6.0 \
+  gotenberg/gotenberg:9.9.0 \
   gotenberg --chromium-ignore-certificate-errors
 ```
 
@@ -80,7 +80,7 @@ service account).
 ## 3. Security — read before deploying anywhere reachable
 
 Gotenberg has a significant recent CVE history. These were fixed in the 8.x line, which ended at
-8.40.0. This project pins **9.6.0**; check the releases page for 9.x advisories at deploy time.
+8.40.0. This project pins **9.9.0**; check the releases page for 9.x advisories at deploy time.
 
 | CVE | Issue | Fixed in |
 |---|---|---|
@@ -110,7 +110,7 @@ _CVE summaries paraphrased from advisory sources for licensing compliance._
    class of CVEs.
 5. **Disable unused features** (`--api-disable-download-from`). Flag names change between releases,
    so verify them against the pinned version with `gotenberg --help`. All flags in the compose file
-   were verified against 9.6.0.
+   were verified against 9.9.0.
 6. **Choose the image variant deliberately** (below).
 
 The CVE history belongs in the Approach A vs B security review. It does not disqualify Gotenberg,
@@ -158,7 +158,45 @@ file sets a 2G / 2 CPU limit. Tune it against real pages and the AC6 batch size 
 
 ---
 
-## 5. What the harness does
+## 5. How a page becomes a PDF
+
+Gotenberg does not convert HTML itself. It has three engines
+([docs](https://gotenberg.dev/docs/about)): **Chromium** prints web pages, **LibreOffice** converts
+office documents, and **litho** does PDF operations (merge, stamp, PDF/A, PDF/UA). This project only
+uses Chromium.
+
+**What happens to one URL:**
+
+1. The script POSTs the URL and options to `/forms/chromium/convert/url`.
+2. Chromium loads the page like a normal browser. It parses the HTML into a DOM and fetches the
+   stylesheets, scripts, fonts and images that the `<head>` and `<body>` reference.
+3. It runs the page's JavaScript. This is how the lazy-image fix works: the script's
+   `waitForExpression` runs inside the live page, so it can edit the DOM (remove `loading="lazy"`,
+   add a `<style>` tag).
+4. It applies the CSS for the chosen media type (`print` or `screen`) and lays the page out at the
+   paper width.
+5. It prints the laid-out page to a PDF and breaks it into pages.
+6. Gotenberg returns the PDF and keeps nothing. Litho only runs if the request lists `stages`
+   (for example `remediate` for PDF/UA). This project sends none yet.
+
+Chromium waits for the page to load, then for `waitForExpression`, then for `waitDelay`.
+
+**What this means for the output:**
+
+| Part of the page | Effect on the PDF |
+|---|---|
+| `<head>` | Not printed. Its `<link>`/`<style>` set the look, and its `<script>` runs and can change the page. |
+| Visible elements | Printed as laid out. |
+| `display: none` content | Not printed. This is why collapsed accordions and the print-hidden hero need CSS handling. |
+| Semantic markup (headings, lists, tables, `alt` text) | With `nativeTaggedPdf=true`, Chromium builds the PDF's tag structure from it. Poor markup gives a poor structure, so accessibility depends on the site. |
+| Paper width | Sets the width the page is laid out at. On Letter, the site switches to its tablet/mobile layout, so the script uses a wider custom page. |
+| Media type | `print` applies the site's `@media print` rules (hides the hero, expands accordions). `screen` shows the page as in a browser. |
+
+These effects are what this POC observed. Items 2 to 4 in `Improvements.md` cover the fixes.
+
+---
+
+## 6. What the harness does
 
 `Test-Gotenberg.ps1` converts every URL in `sample/urls.txt` (one per line; blank lines and `#`
 comments ignored) to a PDF through Gotenberg's Chromium URL route. Run commands and parameters are in
@@ -171,6 +209,8 @@ comments ignored) to a PDF through Gotenberg's Chromium URL route. Run commands 
   names get `-2`, `-3`. The script exits with code 1 if any URL fails.
 - **Current test pages** (`cmstest.michigan.gov/agencysite/components/...`): `accordions`, `tabs`,
   `promocardgroup`, `featureitem`, `timeline`.
+- **Multi-page documents (eBook):** `-Merge` renders each URL in the list and merges the PDFs, in
+  list order, into one file with a bookmark per page. See `sample/ebook-urls.txt` and `Commands.md`.
 - **Not covered yet:** pages that need a login. Gotenberg cannot authenticate by itself; cookies or
   headers must be passed per request, and the script doesn't do that yet (research §6.3).
 
@@ -190,13 +230,14 @@ print CSS expands hidden content, merge works) and was removed.
 
 ---
 
-## 6. Files
+## 7. Files
 
 | File | Purpose |
 |---|---|
 | `README.md` | This document |
 | `Commands.md` | Commands to run the project |
 | `Improvements.md` | Open items to look into |
+| `Options-Comparison.md` | Comparison of the three PDF approaches (Gotenberg, library in Sitecore, browser button) |
 | `Test-Gotenberg.ps1` | POC harness: renders each URL in the list to a PDF |
 | `docker-compose.yml` | Hardened, version-pinned Gotenberg service for a Linux VM or dev tier |
 | `sample/urls.txt` | URLs to render |

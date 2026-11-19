@@ -6,8 +6,8 @@
 # NOTE: This is a LINUX container. It cannot join the Windows-container Sitecore
 #       compose stack in C:\10.4\docker. See README.md section 2.
 #
-# All flags below were verified against 9.6.0 with:
-#   docker run --rm gotenberg/gotenberg:9.6.0 gotenberg --help
+# All flags below were verified against 9.9.0 with:
+#   docker run --rm gotenberg/gotenberg:9.9.0 gotenberg --help
 #
 # IMPORTANT: the "gotenberg" binary name MUST be the first element of `command`.
 # Passing bare flags fails at startup with:
@@ -25,7 +25,7 @@ services:
     #   :9           full      - web pages and office documents.
     #   :9-chromium  smaller   - web pages and screenshots only (no LibreOffice).
     #                            Chromium's nativeTaggedPdf (tagged PDF) works.
-    image: gotenberg/gotenberg:9.6.0
+    image: gotenberg/gotenberg:9.9.0
 
     container_name: gotenberg
 
